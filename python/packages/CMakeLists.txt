@@ -25,6 +25,7 @@ endforeach()
 
 # XXX Make workflow scripts executable.
 set (list_of_exe
+     nisar/workflows/coregister.py
      nisar/workflows/crossmul.py
      nisar/workflows/estimate_abscal_factor.py
      nisar/workflows/faraday_rot_angle_from_rslc.py
