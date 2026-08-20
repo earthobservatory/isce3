@@ -23,6 +23,11 @@ class CoregRunConfig(RunConfig):
     def prep_frequency_and_polarizations(self):
         '''
         check frequency and polarizations and fix as needed
+
+        For the coreg/insar workflows, frequencies and polarizations are
+        restricted to those common to both the reference and (if provided)
+        the secondary RSLC, so that only frequency/polarization pairs that
+        actually exist in both products get processed.
         '''
         error_channel = journal.error('RunConfig.prep_frequency_and_polarizations')
         if self.workflow_name == 'insar' or self.workflow_name == 'coreg':
@@ -33,33 +38,76 @@ class CoregRunConfig(RunConfig):
 
         slc = SLC(hdf5file=input_path)
 
-        # if freq_pols is empty, process all frequencies and polarizations
+        sec_slc = None
+        if self.workflow_name == 'coreg':
+            sec_path = self.cfg['input_file_group'].get('secondary_rslc_file')
+            if sec_path:
+                sec_slc = SLC(hdf5file=sec_path)
+
+        # frequencies common to reference (and secondary, if present)
+        common_freqs = set(slc.frequencies)
+        if sec_slc is not None:
+            common_freqs &= set(sec_slc.frequencies)
+
+        def common_pols(freq):
+            '''polarizations common to reference (and secondary, if present) for freq'''
+            pols = set(slc.polarizations[freq])
+            if sec_slc is not None:
+                pols &= set(sec_slc.polarizations[freq])
+            return pols
+
+        # if freq_pols is empty, process all common frequencies and polarizations
         if freq_pols is None:
+            list_of_frequencies = {}
+            for freq in common_freqs:
+                pols = common_pols(freq)
+                if not pols:
+                    err_str = (f'No common polarization for frequency {freq}'
+                               ' between reference and secondary RSLC.')
+                    error_channel.log(err_str)
+                    raise ValueError(err_str)
+                list_of_frequencies[freq] = sorted(pols)
             self.cfg['processing']['input_subset']['list_of_frequencies'] = \
-                slc.polarizations
+                list_of_frequencies
             return
 
         # otherwise, check contents of freq_pols
         for freq in freq_pols.keys():
             if freq not in slc.frequencies:
-                err_str = (f'Requested frequency {freq} not found in input'
-                           ' product.')
+                err_str = (f'Requested frequency {freq} not found in reference'
+                           ' RSLC product.')
+                error_channel.log(err_str)
+                raise ValueError(err_str)
+            if sec_slc is not None and freq not in sec_slc.frequencies:
+                err_str = (f'Requested frequency {freq} not found in secondary'
+                           ' RSLC product.')
                 error_channel.log(err_str)
                 raise ValueError(err_str)
 
-            # first check polarizations from source hdf5
-            rslc_pols = slc.polarizations[freq]
-            # use all RSLC polarizations if None provided
+            # polarizations common to reference and secondary hdf5s
+            rslc_pols = common_pols(freq)
+            # use all common RSLC polarizations if None provided
             if freq_pols[freq] is None:
-                freq_pols[freq] = rslc_pols
+                if not rslc_pols:
+                    err_str = (f'No common polarization for frequency {freq}'
+                               ' between reference and secondary RSLC.')
+                    error_channel.log(err_str)
+                    raise ValueError(err_str)
+                freq_pols[freq] = sorted(rslc_pols)
                 continue
 
             # use polarizations provided by user
-            # check if user provided polarizations match RSLC ones
+            # check if user provided polarizations match reference and
+            # (if present) secondary RSLC ones
             for usr_pol in freq_pols[freq]:
-                if usr_pol not in rslc_pols:
+                if usr_pol not in slc.polarizations[freq]:
                     err_str = (f'Requested polarization {usr_pol}'
-                               ' not found in input product.')
+                               ' not found in reference RSLC product.')
+                    error_channel.log(err_str)
+                    raise ValueError(err_str)
+                if sec_slc is not None and usr_pol not in sec_slc.polarizations[freq]:
+                    err_str = (f'Requested polarization {usr_pol}'
+                               ' not found in secondary RSLC product.')
                     error_channel.log(err_str)
                     raise ValueError(err_str)
 
