@@ -4,6 +4,7 @@ import os
 import journal
 from ruamel.yaml import YAML
 from nisar.workflows import resample_slc_v2, geo2rdr, rdr2geo
+from nisar.workflows import bandpass_insar
 from nisar.workflows.geocode_insar import InputProduct
 from nisar.workflows.coregister_runconfig import CoregRunConfig
 #from nisar.workflows.persistence import Persistence
@@ -19,13 +20,30 @@ def run(cfg: dict):
     info_channel = journal.info("coreg.run")
     info_channel.log("starting COREG")
     t_all = time.time()
-    if "reference" in cfg['processing']['target_file_type']: 
-#        info_channel.log("unpacking reference, bandpass if neccessary?")
-#        bandpass_insar.run(cfg)
-        info_channel.log("Converting refrence rdr2geo to enable offsets compute")
+    if "reference" in cfg['processing']['target_file_type']:
+        # No bandpass here: it needs both products, and the reference must
+        # never be bandpassed or the topo.vrt computed below would no longer
+        # describe it. See the secondary branch.
+        info_channel.log("Converting reference rdr2geo to enable offsets compute")
         rdr2geo.run(cfg)
 
     if "secondary" in cfg['processing']['target_file_type']:
+        # Bandpass the wider-bandwidth product down to the narrower one's band
+        # so a mixed-mode pair is coregistered on a common range spectrum.
+        # This is a no-op when the pair already matches
+        # (check_range_bandwidth_overlap returns {}).
+        #
+        # It must run here and not in the reference branch: bandpass_insar.run
+        # opens the secondary unconditionally, so it would crash on a
+        # reference-only pass. Running it here also means it shares this
+        # process with geo2rdr and resample, so the reference/secondary path
+        # rewrite it performs on cfg is picked up by both.
+        #
+        # CoregRunConfig.check_rslc_compatibility has already verified that
+        # only the secondary can be the bandpass target, so the reference RSLC
+        # and its rdr2geo topo.vrt are never invalidated.
+        info_channel.log("Bandpassing to a common range band if required")
+        bandpass_insar.run(cfg)
         info_channel.log("Unpacking secondary, computing offsets with geo2rdr")
         geo2rdr.run(cfg)
         info_channel.log("Resampling secondaries with offsets")
